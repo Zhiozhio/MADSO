@@ -901,6 +901,111 @@ void FullSystem::addActiveFrame( ImageAndExposure* image, int id )
 		return;
 	}
 }
+
+////////////////// HERE IS MY CODE ////////////////////////
+void FullSystem::addActiveFrame2(ImageAndExposure* image, SE3 & pose, int id)
+{
+    if(isLost) return;
+    boost::unique_lock<boost::mutex> lock(trackMutex);
+
+
+    // =========================== add into allFrameHistory =========================
+    FrameHessian* fh = new FrameHessian();
+    FrameShell* shell = new FrameShell();
+    shell->camToWorld = SE3(); 		// no lock required, as fh is not used anywhere yet.
+    shell->aff_g2l = AffLight(0,0);
+    shell->marginalizedAt = shell->id = allFrameHistory.size();
+    shell->timestamp = image->timestamp;
+    shell->incoming_id = id;
+    fh->shell = shell;
+    allFrameHistory.push_back(shell);
+
+
+    // =========================== make Images / derivatives etc. =========================
+    fh->ab_exposure = image->exposure_time;
+    fh->makeImages(image->image, &Hcalib);
+
+
+
+
+    if(!initialized)
+    {
+        // use initializer!
+        if(coarseInitializer->frameID<0)	// first frame set. fh is kept by coarseInitializer.
+        {
+
+            coarseInitializer->setFirst(&Hcalib, fh);
+        }
+        else if(coarseInitializer->trackFrame(fh, outputWrapper))	// if SNAPPED
+        {
+
+            initializeFromInitializer(fh);
+            lock.unlock();
+            deliverTrackedFrame(fh, true);
+        }
+        else
+        {
+            // if still initializing
+            fh->shell->poseValid = false;
+            delete fh;
+        }
+        return;
+    }
+    else	// do front-end operation.
+    {
+        // =========================== SWAP tracking reference?. =========================
+        if(coarseTracker_forNewKF->refFrameID > coarseTracker->refFrameID)
+        {
+            boost::unique_lock<boost::mutex> crlock(coarseTrackerSwapMutex);
+            CoarseTracker* tmp = coarseTracker; coarseTracker=coarseTracker_forNewKF; coarseTracker_forNewKF=tmp;
+        }
+
+
+        Vec4 tres = trackNewCoarse(fh);
+        if(!std::isfinite((double)tres[0]) || !std::isfinite((double)tres[1]) || !std::isfinite((double)tres[2]) || !std::isfinite((double)tres[3]))
+        {
+            printf("Initial Tracking failed: LOST!\n");
+            isLost=true;
+            return;
+        }
+
+        bool needToMakeKF = false;
+        if(setting_keyframesPerSecond > 0)
+        {
+            needToMakeKF = allFrameHistory.size()== 1 ||
+                           (fh->shell->timestamp - allKeyFramesHistory.back()->timestamp) > 0.95f/setting_keyframesPerSecond;
+        }
+        else
+        {
+            Vec2 refToFh=AffLight::fromToVecExposure(coarseTracker->lastRef->ab_exposure, fh->ab_exposure,
+                                                     coarseTracker->lastRef_aff_g2l, fh->shell->aff_g2l);
+
+            // BRIGHTNESS CHECK
+            needToMakeKF = allFrameHistory.size()== 1 ||
+                           setting_kfGlobalWeight*setting_maxShiftWeightT *  sqrtf((double)tres[1]) / (wG[0]+hG[0]) +
+                           setting_kfGlobalWeight*setting_maxShiftWeightR *  sqrtf((double)tres[2]) / (wG[0]+hG[0]) +
+                           setting_kfGlobalWeight*setting_maxShiftWeightRT * sqrtf((double)tres[3]) / (wG[0]+hG[0]) +
+                           setting_kfGlobalWeight*setting_maxAffineWeight * fabs(logf((float)refToFh[0])) > 1 ||
+                           2*coarseTracker->firstCoarseRMSE < tres[0];
+
+        }
+
+
+
+
+        for(IOWrap::Output3DWrapper* ow : outputWrapper)
+            ow->publishCamPose(fh->shell, &Hcalib);
+
+
+
+
+        lock.unlock();
+        deliverTrackedFrame(fh, needToMakeKF);
+        return;
+    }
+}
+////////////////// END OF MY CODE ////////////////////////
+
 void FullSystem::deliverTrackedFrame(FrameHessian* fh, bool needKF)
 {
 
@@ -1220,7 +1325,7 @@ void FullSystem::initializeFromInitializer(FrameHessian* newFrame)
 	float sumID=1e-5, numID=1e-5;
 	for(int i=0;i<coarseInitializer->numPoints[0];i++)
 	{
-		sumID += coarseInitializer->points[0][i].iR;
+		sumID += coarseInitializer->points[0][i].iR; // level 0 iR value
 		numID++;
 	}
 	float rescaleFactor = 1 / (sumID / numID);
@@ -1252,20 +1357,25 @@ void FullSystem::initializeFromInitializer(FrameHessian* newFrame)
 		ph->hasDepthPrior=true;
 		ph->setPointStatus(PointHessian::ACTIVE);
 
-		firstFrame->pointHessians.push_back(ph);
+		firstFrame->pointHessians.push_back(ph);  // add point to firstFrame
 		ef->insertPoint(ph);
 	}
 
 
 
 	SE3 firstToNew = coarseInitializer->thisToNext;
-	firstToNew.translation() /= rescaleFactor;
+	firstToNew.translation() /= rescaleFactor; // Because inverse depth using *, the distance should use /
 
 
 	// really no lock required, as we are initializing.
 	{
-		boost::unique_lock<boost::mutex> crlock(shellPoseMutex);
-		firstFrame->shell->camToWorld = SE3();
+		boost::unique_lock<boost::mutex> crlock(shellPoseMutex);  ////// here set the pose of first frame and current frame (thisToNext is current), please change this
+
+		//
+        Mat33 R = Eigen::AngleAxisd(M_PI/2, Vec3(0,0,1)).toRotationMatrix();      ////// change by us
+		firstFrame->shell->camToWorld = SE3(R, Vec3(1,1,0));                        ////// only change this from origin to what we observed
+        // firstFrame->shell->camToWorld = SE3();
+
 		firstFrame->shell->aff_g2l = AffLight(0,0);
 		firstFrame->setEvalPT_scaled(firstFrame->shell->camToWorld.inverse(),firstFrame->shell->aff_g2l);
 		firstFrame->shell->trackingRef=0;

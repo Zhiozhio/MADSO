@@ -213,7 +213,7 @@ extern int staticPatternPadding[10];
 
 //
 #define patternNum 8
-#define patternP staticPattern[8]
+#define patternP staticPattern[8] // the 9th pattern: 8 for SSE efficiency
 #define patternPadding 2
 
 

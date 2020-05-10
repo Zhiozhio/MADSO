@@ -365,6 +365,14 @@ int main( int argc, char** argv )
 	reader->setGlobalCalibration();
 
 
+	////////////////// HERE IS MY CODE ////////////////////////
+    // reader has a field, timestamps, containing all the timestamps read from file
+
+	MobilePoseReader* poseReader = new MobilePoseReader("absolute_trajectory.csv");
+
+    ////////////////// END OF MY CODE ////////////////////////
+
+
 
 	if(setting_photometricCalibration > 0 && reader->getPhotometricGamma() == 0)
 	{
@@ -430,7 +438,7 @@ int main( int argc, char** argv )
             {
                 double tsThis = reader->getTimestamp(idsToPlay[idsToPlay.size()-1]);
                 double tsPrev = reader->getTimestamp(idsToPlay[idsToPlay.size()-2]);
-                timesToPlayAt.push_back(timesToPlayAt.back() +  fabs(tsThis-tsPrev)/playbackSpeed);
+                timesToPlayAt.push_back(timesToPlayAt.back() +  fabs(tsThis-tsPrev)/playbackSpeed); // all time point the picture should be displayed
             }
         }
 
@@ -470,6 +478,17 @@ int main( int argc, char** argv )
             else
                 img = reader->getImage(i);
 
+            ////////////////// HERE IS MY CODE ////////////////////////
+            //std::cout << playbackSpeed << std::endl;
+            //for (int jjj=0; jjj<timesToPlayAt.size();++jjj)
+            //    std::cout << std::fixed << std::setprecision(9) << img->timestamp << std::endl;
+
+            //
+
+            SE3 pose = poseReader->getVirtualPose(img->timestamp);
+
+            ////////////////// END OF MY CODE ////////////////////////
+
 
 
             bool skipFrame=false;
@@ -490,6 +509,11 @@ int main( int argc, char** argv )
 
 
             if(!skipFrame) fullSystem->addActiveFrame(img, i);
+            ////////////////// HERE IS MY CODE ////////////////////////
+
+            // if(!skipFrame) fullSystem->addActiveFrame2(img, pose, i);
+
+            ////////////////// END OF MY CODE ////////////////////////
 
 
 

@@ -63,7 +63,7 @@ PixelSelector::~PixelSelector()
 	delete[] thsSmoothed;
 }
 
-int computeHistQuantil(int* hist, float below)
+int computeHistQuantil(int* hist, float below) // chose the gradient value around the Median of total pixels
 {
 	int th = hist[0]*below+0.5f;
 	for(int i=0;i<90;i++)
@@ -83,8 +83,8 @@ void PixelSelector::makeHists(const FrameHessian* const fh)
 	int w = wG[0];
 	int h = hG[0];
 
-	int w32 = w/32;
-	int h32 = h/32;
+	int w32 = w/32; // set the grids width number
+	int h32 = h/32; // set the grids height number
 	thsStep = w32;
 
 	for(int y=0;y<h32;y++)
@@ -101,14 +101,14 @@ void PixelSelector::makeHists(const FrameHessian* const fh)
 				if(it>w-2 || jt>h-2 || it<1 || jt<1) continue;
 				int g = sqrtf(map0[i+j*w]);
 				if(g>48) g=48;
-				hist0[g+1]++;
-				hist0[0]++;
+				hist0[g+1]++; // histogram of gradient from 0~48
+				hist0[0]++; // total number of pixel points
 			}
 
 			ths[x+y*w32] = computeHistQuantil(hist0,setting_minGradHistCut) + setting_minGradHistAdd;
 		}
 
-	for(int y=0;y<h32;y++)
+	for(int y=0;y<h32;y++) // use average of around 4 grids as well as itself as the smoothed threshold, but why square it?
 		for(int x=0;x<w32;x++)
 		{
 			float sum=0,num=0;
@@ -384,7 +384,7 @@ Eigen::Vector3i PixelSelector::select(const FrameHessian* const fh,
 						if(dirNorm > bestVal2)
 						{ bestVal2 = dirNorm; bestIdx2 = idx; bestIdx3 = -2; bestIdx4 = -2;}
 					}
-					if(bestIdx3==-2) continue;
+					if(bestIdx3==-2) continue; // only if all dirNorm is zero (very low possibility) or smaller than the pixelTH0*thFactor, execute the later code
 
 					float ag1 = mapmax1[(int)(xf*0.5f+0.25f) + (int)(yf*0.5f+0.25f)*w1];
 					if(ag1 > pixelTH1*thFactor)
@@ -413,7 +413,7 @@ Eigen::Vector3i PixelSelector::select(const FrameHessian* const fh,
 				if(bestIdx2>0)
 				{
 					map_out[bestIdx2] = 1;
-					bestVal3 = 1e10;
+					bestVal3 = 1e10; // if some point is selected in step length 2 loop, it is denied to do selection in outer loop. The outer loop has lower local threshold
 					n2++;
 				}
 			}

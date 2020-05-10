@@ -137,6 +137,11 @@ public:
 
 	// adds a new frame, and creates point & residual structs.
 	void addActiveFrame(ImageAndExposure* image, int id);
+    ////////////////// HERE IS MY CODE ////////////////////////
+
+    void addActiveFrame2(ImageAndExposure* image, SE3 & pose, int id);
+
+    ////////////////// END OF MY CODE ////////////////////////
 
 	// marginalizes a frame. drops / marginalizes points & residuals.
 	void marginalizeFrame(FrameHessian* frame);

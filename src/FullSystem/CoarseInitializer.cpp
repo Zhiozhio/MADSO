@@ -173,7 +173,7 @@ bool CoarseInitializer::trackFrame(FrameHessian* newFrameHessian, std::vector<IO
 				inc = - (wM * (Hl.ldlt().solve(bl)));	//=-H^-1 * b.
 
 
-			SE3 refToNew_new = SE3::exp(inc.head<6>().cast<double>()) * refToNew_current;
+			SE3 refToNew_new = SE3::exp(inc.head<6>().cast<double>()) * refToNew_current; // increment
 			AffLight refToNew_aff_new = refToNew_aff_current;
 			refToNew_aff_new.a += inc[6];
 			refToNew_aff_new.b += inc[7];
@@ -184,7 +184,7 @@ bool CoarseInitializer::trackFrame(FrameHessian* newFrameHessian, std::vector<IO
 			Vec3f resNew = calcResAndGS(lvl, H_new, b_new, Hsc_new, bsc_new, refToNew_new, refToNew_aff_new, false);
 			Vec3f regEnergy = calcEC(lvl);
 
-			float eTotalNew = (resNew[0]+resNew[1]+regEnergy[1]);
+			float eTotalNew = (resNew[0]+resNew[1]+regEnergy[1]); // residual + alphaEnergy(???) + the difference of iR to idepth and idepth_new
 			float eTotalOld = (resOld[0]+resOld[1]+regEnergy[0]);
 
 
@@ -387,37 +387,37 @@ Vec3f CoarseInitializer::calcResAndGS(
 			int dx = patternP[idx][0];
 			int dy = patternP[idx][1];
 
-
-			Vec3f pt = RKi * Vec3f(point->u+dx, point->v+dy, 1) + t*point->idepth_new;
-			float u = pt[0] / pt[2];
+            // pt is warped homogeneous point from refToNew
+			Vec3f pt = RKi * Vec3f(point->u+dx, point->v+dy, 1) + t*point->idepth_new; // notice that is inverse depth
+			float u = pt[0] / pt[2];  // u,v are homogeneous coordinates, not pixels
 			float v = pt[1] / pt[2];
-			float Ku = fxl * u + cxl;
+			float Ku = fxl * u + cxl; // Ku,Kv are pixels
 			float Kv = fyl * v + cyl;
-			float new_idepth = point->idepth_new/pt[2];
+			float new_idepth = point->idepth_new/pt[2]; // inverse depth in new frame
 
-			if(!(Ku > 1 && Kv > 1 && Ku < wl-2 && Kv < hl-2 && new_idepth > 0))
+			if(!(Ku > 1 && Kv > 1 && Ku < wl-2 && Kv < hl-2 && new_idepth > 0)) // if not project to new frame properly
 			{
 				isGood = false;
 				break;
 			}
 
-			Vec3f hitColor = getInterpolatedElement33(colorNew, Ku, Kv, wl);
+			Vec3f hitColor = getInterpolatedElement33(colorNew, Ku, Kv, wl); // 2D linear interpolate of pixel
 			//Vec3f hitColor = getInterpolatedElement33BiCub(colorNew, Ku, Kv, wl);
 
 			//float rlR = colorRef[point->u+dx + (point->v+dy) * wl][0];
 			float rlR = getInterpolatedElement31(colorRef, point->u+dx, point->v+dy, wl);
 
-			if(!std::isfinite(rlR) || !std::isfinite((float)hitColor[0]))
+			if(!std::isfinite(rlR) || !std::isfinite((float)hitColor[0])) // if the color is not proper
 			{
 				isGood = false;
 				break;
 			}
 
 
-			float residual = hitColor[0] - r2new_aff[0] * rlR - r2new_aff[1];
+			float residual = hitColor[0] - r2new_aff[0] * rlR - r2new_aff[1]; // relative a and b
 			float hw = fabs(residual) < setting_huberTH ? 1 : setting_huberTH / fabs(residual);
-			energy += hw *residual*residual*(2-hw);
-
+			energy += hw *residual*residual*(2-hw); // hw as weight, make energy increase linear to residual
+                        // this way the first and second differential are both continue
 
 
 
@@ -435,7 +435,7 @@ Vec3f CoarseInitializer::calcResAndGS(
 			dp5[idx] = -v*dxInterp + u*dyInterp;
 			dp6[idx] = - hw*r2new_aff[0] * rlR;
 			dp7[idx] = - hw*1;
-			dd[idx] = dxInterp * dxdd  + dyInterp * dydd;
+			dd[idx] = dxInterp * dxdd  + dyInterp * dydd; // here omit the new_idepth/idepth which is similar to 1
 			r[idx] = hw*residual;
 
 			float maxstep = 1.0f / Vec2f(dxdd*fxl, dydd*fyl).norm();
@@ -452,13 +452,13 @@ Vec3f CoarseInitializer::calcResAndGS(
 			JbBuffer_new[i][7] += dp7[idx]*dd[idx];
 			JbBuffer_new[i][8] += r[idx]*dd[idx];
 			JbBuffer_new[i][9] += dd[idx]*dd[idx];
-		}
+		} // Because the pattern 8 pixel's residuals are added, so the Jaccobian is also added
 
 		if(!isGood || energy > point->outlierTH*20)
 		{
 			E.updateSingle((float)(point->energy[0]));
 			point->isGood_new = false;
-			point->energy_new = point->energy;
+			point->energy_new = point->energy; // if not good use original energy
 			continue;
 		}
 
@@ -515,7 +515,7 @@ Vec3f CoarseInitializer::calcResAndGS(
 			E.updateSingle((float)(point->energy_new[1]));
 		}
 	}
-	EAlpha.finish();
+	EAlpha.finish(); // keeping zero. no used
 	float alphaEnergy = alphaW*(EAlpha.A + refToNew.translation().squaredNorm() * npts);
 
 	//printf("AE = %f * %f + %f\n", alphaW, EAlpha.A, refToNew.translation().squaredNorm() * npts);
@@ -523,10 +523,10 @@ Vec3f CoarseInitializer::calcResAndGS(
 
 	// compute alpha opt.
 	float alphaOpt;
-	if(alphaEnergy > alphaK*npts)
+	if(alphaEnergy > alphaK*npts) // actually is t^2 (translation square) > alphaK/alphaW
 	{
 		alphaOpt = 0;
-		alphaEnergy = alphaK*npts;
+		alphaEnergy = alphaK*npts; // that is the CONDITION make the snapped TRUE!!
 	}
 	else
 	{
@@ -543,8 +543,8 @@ Vec3f CoarseInitializer::calcResAndGS(
 
 		point->lastHessian_new = JbBuffer_new[i][9];
 
-		JbBuffer_new[i][8] += alphaOpt*(point->idepth_new - 1);
-		JbBuffer_new[i][9] += alphaOpt;
+		JbBuffer_new[i][8] += alphaOpt*(point->idepth_new - 1); // if the point is closer, this term is bigger. And this is J_rho * r
+		JbBuffer_new[i][9] += alphaOpt; // if alphaOpt is not zero, than this is a quite large increase
 
 		if(alphaOpt==0)
 		{
@@ -552,7 +552,7 @@ Vec3f CoarseInitializer::calcResAndGS(
 			JbBuffer_new[i][9] += couplingWeight;
 		}
 
-		JbBuffer_new[i][9] = 1/(1+JbBuffer_new[i][9]);
+		JbBuffer_new[i][9] = 1/(1+JbBuffer_new[i][9]); // the
 		acc9SC.updateSingleWeighted(
 				(float)JbBuffer_new[i][0],(float)JbBuffer_new[i][1],(float)JbBuffer_new[i][2],(float)JbBuffer_new[i][3],
 				(float)JbBuffer_new[i][4],(float)JbBuffer_new[i][5],(float)JbBuffer_new[i][6],(float)JbBuffer_new[i][7],
@@ -629,7 +629,7 @@ Vec3f CoarseInitializer::calcEC(int lvl)
 	//printf("ER: %f %f %f!\n", couplingWeight*E.A1m[0], couplingWeight*E.A1m[1], (float)E.num.numIn1m);
 	return Vec3f(couplingWeight*E.A1m[0], couplingWeight*E.A1m[1], E.num);
 }
-void CoarseInitializer::optReg(int lvl)
+void CoarseInitializer::optReg(int lvl) // make the point-iR more smooth by the value of its neighbours
 {
 	int npts = numPoints[lvl];
 	Pnt* ptsl = points[lvl];
@@ -709,7 +709,7 @@ void CoarseInitializer::propagateUp(int srcLvl)
 	optReg(srcLvl+1);
 }
 
-void CoarseInitializer::propagateDown(int srcLvl)
+void CoarseInitializer::propagateDown(int srcLvl) // check the iR (and idepth) of points. if is bad, use the parent.
 {
 	assert(srcLvl>0);
 	// set idepth of target
@@ -818,7 +818,7 @@ void CoarseInitializer::setFirst(	CalibHessian* HCalib, FrameHessian* newFrameHe
 					int dx = patternP[idx][0];
 					int dy = patternP[idx][1];
 					float absgrad = cpt[dx + dy*w[lvl]].tail<2>().squaredNorm();
-					sumGrad2 += absgrad;
+					sumGrad2 += absgrad; // the sum of all gradient square of pattern of this point
 				}
 
 //				float gth = setting_outlierTH * (sqrtf(sumGrad2)+setting_outlierTHSumComponent);
@@ -851,7 +851,7 @@ void CoarseInitializer::setFirst(	CalibHessian* HCalib, FrameHessian* newFrameHe
 
 }
 
-void CoarseInitializer::resetPoints(int lvl)
+void CoarseInitializer::resetPoints(int lvl) // set points energy to 0, and repair the top level bad point
 {
 	Pnt* pts = points[lvl];
 	int npts = numPoints[lvl];
@@ -892,7 +892,7 @@ void CoarseInitializer::doStep(int lvl, float lambda, Vec8f inc)
 
 
 		float b = JbBuffer[i][8] + JbBuffer[i].head<8>().dot(inc);
-		float step = - b * JbBuffer[i][9] / (1+lambda);
+		float step = - b * JbBuffer[i][9] / (1+lambda); // Schur complement to compute increment of idepth
 
 
 		float maxstep = maxPixelStep*pts[i].maxstep;
@@ -904,7 +904,7 @@ void CoarseInitializer::doStep(int lvl, float lambda, Vec8f inc)
 		float newIdepth = pts[i].idepth + step;
 		if(newIdepth < 1e-3 ) newIdepth = 1e-3;
 		if(newIdepth > 50) newIdepth = 50;
-		pts[i].idepth_new = newIdepth;
+		pts[i].idepth_new = newIdepth; // increment of the depth
 	}
 
 }

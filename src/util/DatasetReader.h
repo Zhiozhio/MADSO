@@ -26,11 +26,13 @@
 #include "util/settings.h"
 #include "util/globalFuncs.h"
 #include "util/globalCalib.h"
+#include "NumType.h"
 
 #include <sstream>
 #include <fstream>
 #include <dirent.h>
 #include <algorithm>
+#include <map>
 
 #include "util/Undistort.h"
 #include "IOWrapper/ImageRW.h"
@@ -375,5 +377,127 @@ private:
 	zip_t* ziparchive;
 	char* databuffer;
 #endif
+};
+
+
+
+////////////////////////////////// HERE IS MY CODE /////////////////////////////////
+struct PoseFromMobile
+{
+    double x;
+    double y;
+    double z;
+
+    double qx;
+    double qy;
+    double qz;
+    double qw;
+};
+
+
+class MobilePoseReader
+{
+public:
+    MobilePoseReader(std::string file)
+    {
+        // open file and read the pose information to poses
+        std::ifstream abs_traj(file);
+
+        std::string line;
+        while ( getline(abs_traj, line) )
+        {
+            if (!line.empty() && line[0] != '#')
+            {
+                std::stringstream ss(line);
+                std::string time_stamp, pose_elem;
+                std::vector<double> pose;
+
+                getline(ss, time_stamp, ',');   // read timestamp first
+                while ( getline(ss, pose_elem, ',') )
+                {
+                    pose.push_back(stod(pose_elem));
+                }
+                timestamps_.push_back(std::stod(time_stamp));
+                poses_.push_back(PoseFromMobile{pose[0],pose[1],pose[2],pose[3],pose[4],pose[5],pose[6]});
+            }
+        }
+    }
+
+    SE3 calcPose(const PoseFromMobile & pose)
+    {
+        Vec3 t(pose.x, pose.y, pose.z);
+        Eigen::Quaterniond q(pose.qw, pose.qx, pose.qy, pose.qz);
+        q.normalize();
+        return {q, t};
+    }
+
+    SE3 poseInterpolate(const PoseFromMobile & pose1, const PoseFromMobile & pose2, double u)
+    {
+        SE3 left =  calcPose(pose1);
+        SE3 right = calcPose(pose2);
+        return left * SE3::exp(u * (left.inverse() * right).log() );
+    }
+
+    SE3 getVirtualPose(const double & time)
+    {
+        // Return pose by interpolate
+        assert(timestamps_.size() == poses_.size()); // make sure our file read is correct
+
+        auto range = std::equal_range(timestamps_.cbegin(), timestamps_.cend(), time);
+
+        const double diff_thresh = 0.02;
+        //double diff_left = *range.first -
+        if (range.first != range.second)
+        {
+            auto it_index = range.first - timestamps_.cbegin() + (range.second - range.first)/2;
+            return calcPose(*(poses_.cbegin() + it_index) );
+        }
+        else
+        {
+            // Here we omit the range check, please be careful!!
+            double diff_left =  time     - *(range.first-1);
+            double diff_right = *range.first - time;
+            auto closer_it = diff_left < diff_right ? range.first-1 : range.first;
+            if (std::abs(*closer_it - time) < diff_thresh)
+            {
+                auto it_index = closer_it - timestamps_.cbegin();
+                return calcPose(*(poses_.cbegin() + it_index) );
+            }
+            else
+            {
+                auto it_index1 = range.first-1 - timestamps_.cbegin();
+                auto it_index2 = range.first   - timestamps_.cbegin();
+                double ratio = diff_left / (diff_left + diff_right);
+                return poseInterpolate(*(poses_.cbegin() + it_index1), *(poses_.cbegin() + it_index2), ratio);
+            }
+        }
+    }
+
+/*    SE3 getVirtualPose(const double & time)
+    {
+        // Return pose by extrapolate
+        // Because this is the timestamps from mobile device, we can only use the time "before"
+        assert(timestamps_.size() == poses_.size()); // make sure our file read is correct
+
+        auto upperb = std::upper_bound(timestamps_.cbegin(), timestamps_.cend(), time);
+
+        const double diff_thresh = 0.02;
+        if (*upperb - *(upperb-1) <= diff_thresh)
+        {
+            auto it_index = upperb - timestamps_.cbegin();
+            auto pose_it = (poses_.cbegin() + it_index);
+            return calcPose(*pose_it);
+        }
+        else
+        {
+
+        }
+
+    }*/
+
+private:
+    std::vector<double> timestamps_;
+    std::vector<PoseFromMobile> poses_;
+
 };
 
